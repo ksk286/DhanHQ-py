@@ -26,14 +26,13 @@ class DataFetcher:
 
     def fetch_data(self, symbol, start_date, end_date, interval='1'):
         """
-        Fetches data from Dhan API or generates synthetic data if API not available.
+        Fetches data from Dhan API. Fails if API not available.
         Interval: '1' for 1-minute.
         """
         if self.dhan:
             return self._fetch_from_dhan(symbol, start_date, end_date, interval)
         else:
-            print("Dhan API not configured or available. Generating synthetic data.")
-            return self.generate_synthetic_data(start_date, end_date)
+            raise Exception("Dhan API not configured or available. Set DHAN_CLIENT_ID and DHAN_ACCESS_TOKEN in environment.")
 
     def _fetch_from_dhan(self, symbol, start_date, end_date, interval):
         # Recursive fetch logic for 90 days limit

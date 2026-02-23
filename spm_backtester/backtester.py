@@ -26,7 +26,7 @@ class Backtester:
 
         if df_1min is None or df_1min.empty:
             print("No data found.")
-            return
+            return pd.DataFrame(), None, [], [], []
 
         # 2. Resample Data
         print("Resampling data...")

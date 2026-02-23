@@ -42,12 +42,22 @@ class DataFetcher:
         all_dfs = []
         current_start = start_date
 
-        # Determine Security ID and Exchange Segment (Simplification: assuming user provides mapping or look up)
-        # For now, using config defaults or placeholders.
-        # In a real scenario, you'd fetch the scrip master to get security_id.
-        security_id = "1333" # Example: HDFC Bank or Nifty Future ID
-        exchange_segment = config.EXCHANGE_SEGMENT
-        instrument_type = config.INSTRUMENT_TYPE
+        # Determine Security ID and Exchange Segment
+        # NOTE: Dhan requires 'security_id' (string code) not symbol name.
+        # User is expected to provide correct ID or update config/mapping.
+        # For NIFTY 50 Futures, typically it's needed to look up.
+        # Here we assume the symbol passed IS the security_id if purely numeric,
+        # or we fallback to config default.
+        if symbol.isdigit():
+             security_id = symbol
+        else:
+             # Fallback to a default or require user input
+             # For NIFTY 50 Index Future, ID changes every expiry.
+             # Using a placeholder ID that user must update in config if needed.
+             security_id = getattr(config, 'DHAN_SECURITY_ID', '1333')
+
+        exchange_segment = getattr(config, 'DHAN_EXCHANGE_SEGMENT', 'NSE_FNO')
+        instrument_type = getattr(config, 'DHAN_INSTRUMENT_TYPE', 'FUT')
 
         while current_start < end_date:
             current_end = min(current_start + datetime.timedelta(days=90), end_date)
@@ -56,36 +66,72 @@ class DataFetcher:
 
             try:
                 # Actual API Call
-                # Note: This will fail without valid credentials/keys
-                data = self.dhan.historical_minute_charts(
-                    symbol=symbol,
+                data = self.dhan.intraday_minute_data(
+                    security_id=security_id,
                     exchange_segment=exchange_segment,
                     instrument_type=instrument_type,
-                    expiry_code=0,
                     from_date=current_start.strftime('%Y-%m-%d'),
                     to_date=current_end.strftime('%Y-%m-%d')
                 )
 
                 if data['status'] == 'success':
-                    df = pd.DataFrame(data['data'])
-                    # Convert to standard format
-                    # Dhan returns: start_Time, open, high, low, close, volume
-                    # Need to map columns
+                    # data['data'] is typically a dict with lists: {'start_Time': [], 'open': [], ...}
+                    # or a list of dicts. The library usually returns a dict matching the API response.
+                    raw_data = data['data']
+
+                    if isinstance(raw_data, dict):
+                        df = pd.DataFrame(raw_data)
+                    else:
+                        # Assuming list of dicts if not dict of lists
+                        df = pd.DataFrame(raw_data)
+
                     if not df.empty:
-                        # Map columns based on Dhan response structure
-                        # Usually it is a list of lists or dicts
-                        pass
-                        # Assuming dict for now, need to verify Dhan structure
-                        # Since I can't run this, I will catch the error and return synthetic
+                        # Standardize columns
+                        # Dhan API typically returns: start_Time (epoch), open, high, low, close, volume
+                        # Check column names
+
+                        # Handle Dhan timestamp (epoch or string?)
+                        # Usually Dhan returns 'start_Time' as integer (epoch time)
+                        if 'start_Time' in df.columns:
+                             # Convert epoch to datetime
+                             # Dhan epoch is usually standard unix timestamp
+                             df['datetime'] = pd.to_datetime(df['start_Time'], unit='s')
+                             # Convert to IST? Dhan returns time in IST usually? Or UTC?
+                             # Usually Indian APIs return IST or timestamp. Pandas assumes UTC if unit='s'.
+                             # We'll localize to UTC then convert to Asia/Kolkata if needed.
+                             # For simplicity, assuming local naive time matching market hours.
+                             # If values look like 167... it's epoch.
+                             pass
+                        elif 'date' in df.columns:
+                             df['datetime'] = pd.to_datetime(df['date'])
+
+                        # Ensure standard OHLCV columns
+                        rename_map = {
+                            'start_Time': 'datetime',
+                            'o': 'open', 'h': 'high', 'l': 'low', 'c': 'close', 'v': 'volume',
+                            'open': 'open', 'high': 'high', 'low': 'low', 'close': 'close', 'volume': 'volume'
+                        }
+                        df.rename(columns=rename_map, inplace=True)
+
+                        # Set Index
+                        if 'datetime' in df.columns:
+                            df.set_index('datetime', inplace=True)
+                            all_dfs.append(df)
+                        else:
+                            print("Warning: Could not identify datetime column in Dhan response.")
+                            print(df.columns)
+                    else:
+                        print(f"No data returned for batch {current_start.date()}")
+
                 else:
                     print(f"Dhan API Error: {data.get('remarks')}")
+                    # If error is about invalid session, stop.
+                    if "Session" in str(data.get('remarks')):
+                        raise Exception("Invalid Session")
 
             except Exception as e:
-                print(f"Error fetching batch: {e}. Switching to synthetic data for this batch.")
-                # Fallback to synthetic for this batch to allow backtest to proceed
-                # In production, you might want to raise error
-                df = self.generate_synthetic_data(current_start, current_end)
-                all_dfs.append(df)
+                print(f"Error fetching batch: {e}")
+                raise e # Stop if real API fails
 
             current_start = current_end + datetime.timedelta(days=1)
             time.sleep(0.5) # Rate limit

@@ -1,14 +1,17 @@
 # Configuration for SPM Backtester
 
+import os
+
 # Dhan API Credentials
 # Replace with your actual credentials or set via environment variables
-DHAN_CLIENT_ID = "YOUR_CLIENT_ID"
-DHAN_ACCESS_TOKEN = "YOUR_ACCESS_TOKEN"
+DHAN_CLIENT_ID = os.getenv("DHAN_CLIENT_ID", "YOUR_CLIENT_ID")
+DHAN_ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "YOUR_ACCESS_TOKEN")
 
 # Data Fetching
-SYMBOL = "NIFTY 50" # Default Symbol
-EXCHANGE_SEGMENT = "NSE_FNO" # Or NSE_EQ
-INSTRUMENT_TYPE = "FUT" # FUT/OPT
+SYMBOL = "NIFTY 50" # Default Symbol Name
+DHAN_SECURITY_ID = "1333" # Default Security ID (e.g. NIFTY 50 Index Future). Update this!
+DHAN_EXCHANGE_SEGMENT = "NSE_FNO" # Or NSE_EQ
+DHAN_INSTRUMENT_TYPE = "FUT" # FUT/OPT or INDEX
 
 # Backtesting Parameters
 INITIAL_CAPITAL = 500000

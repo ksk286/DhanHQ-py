@@ -21,8 +21,8 @@ CLIENT_ID = os.getenv("DHAN_CLIENT_ID", "")
 ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "")
 # Security ID for Nifty Future (Update based on current contract)
 # Example: Find the Security ID from Dhan Instrument list
-SECURITY_ID = os.getenv("DHAN_SECURITY_ID", "13") 
-EXCHANGE_SEGMENT = "NSE_FNO" 
+SECURITY_ID = os.getenv("DHAN_SECURITY_ID", "13")
+EXCHANGE_SEGMENT = "NSE_FNO"
 INSTRUMENT_TYPE = "FUTIDX" # Future Index
 
 def fetch_historical_data(client_id, access_token, security_id, days=5):
@@ -30,16 +30,16 @@ def fetch_historical_data(client_id, access_token, security_id, days=5):
     print("Initializing DhanHQ Client...")
     dhan_context = DhanContext(client_id, access_token)
     dhan = dhanhq(dhan_context)
-    
+
     # Calculate dates
     to_date = datetime.datetime.now()
     from_date = to_date - datetime.timedelta(days=days)
-    
+
     f_date = from_date.strftime("%Y-%m-%d")
     t_date = to_date.strftime("%Y-%m-%d")
 
     print(f"Fetching data from {f_date} to {t_date} for Security ID {security_id}...")
-    
+
     try:
         response = dhan.intraday_minute_data(
             security_id=security_id,
@@ -49,14 +49,14 @@ def fetch_historical_data(client_id, access_token, security_id, days=5):
             to_date=t_date,
             interval=1
         )
-        
+
         if response.get('status') == 'failure':
             raise Exception(f"API Error: {response.get('remarks')}")
-            
+
         data = response.get('data')
         if not data:
              raise Exception("No data returned from API (Empty response)")
-             
+
         # Parse data
         # Data is dict with lists: open, high, low, close, volume, timestamp (epoch)
         # Verify required keys exist
@@ -67,7 +67,7 @@ def fetch_historical_data(client_id, access_token, security_id, days=5):
              raise Exception(f"Missing required keys in data. Expected {required_keys}")
 
         df = pd.DataFrame(data)
-        
+
         if df.empty:
             raise Exception("Returned DataFrame is empty.")
 
@@ -77,20 +77,20 @@ def fetch_historical_data(client_id, access_token, security_id, days=5):
         unit = 's'
         if first_ts > 10000000000: # > 10^10 implies ms (13 digits)
             unit = 'ms'
-            
+
         df['datetime'] = pd.to_datetime(df['timestamp'], unit=unit)
-        
+
         # Set index
         df.set_index('datetime', inplace=True)
-        
+
         # Ensure numeric columns
         cols = ['open', 'high', 'low', 'close', 'volume']
         for col in cols:
             df[col] = pd.to_numeric(df[col])
-            
+
         print(f"Successfully fetched {len(df)} rows.")
         return df[['open', 'high', 'low', 'close', 'volume']]
-        
+
     except Exception as e:
         print(f"Error fetching data: {e}")
         return pd.DataFrame()
@@ -98,22 +98,22 @@ def fetch_historical_data(client_id, access_token, security_id, days=5):
 def calculate_indicators(df):
     """Calculates necessary indicators for the strategy."""
     df['date'] = df.index.date
-    
+
     # VWAP
     df['cum_vol'] = df.groupby('date')['volume'].cumsum()
     df['cum_vol_price'] = df.groupby('date').apply(lambda x: (x['close'] * x['volume']).cumsum()).reset_index(level=0, drop=True)
     df['vwap'] = df['cum_vol_price'] / df['cum_vol']
-    
+
     # Volume Spike (Volume > 2 * SMA(20))
     df['vol_sma'] = df['volume'].rolling(window=20).mean()
     df['vol_spike'] = df['volume'] > (df['vol_sma'] * 2.0)
-    
+
     # OR High/Low (9:15 - 9:30)
     # We will calculate this dynamically in the loop or pre-calculate
     # Pre-calculating is faster
     df['or_high'] = np.nan
     df['or_low'] = np.nan
-    
+
     grouped = df.groupby('date')
     for date, group in grouped:
         # Get data between 9:15 and 9:30
@@ -122,11 +122,11 @@ def calculate_indicators(df):
             or_data = group[mask_or]
             or_h = or_data['high'].max()
             or_l = or_data['low'].min()
-            
+
             # Broadcast to the rest of the day
             df.loc[group.index, 'or_high'] = or_h
             df.loc[group.index, 'or_low'] = or_l
-            
+
     return df
 
 def resample_to_3min(df):
@@ -141,14 +141,14 @@ def resample_to_3min(df):
     # Identify swings
     # Swing High: High[t-1] > High[t-2] and High[t-1] > High[t]
     # Swing Low: Low[t-1] < Low[t-2] and Low[t-1] < Low[t]
-    
+
     df_3min['swing_high'] = (df_3min['high'].shift(1) > df_3min['high'].shift(2)) & (df_3min['high'].shift(1) > df_3min['high'])
     df_3min['swing_low'] = (df_3min['low'].shift(1) < df_3min['low'].shift(2)) & (df_3min['low'].shift(1) < df_3min['low'])
-    
+
     # Record the Price of the swing
     df_3min['swing_high_price'] = np.where(df_3min['swing_high'], df_3min['high'].shift(1), np.nan)
     df_3min['swing_low_price'] = np.where(df_3min['swing_low'], df_3min['low'].shift(1), np.nan)
-    
+
     # Forward fill to know the "most recent" swing
     df_3min['last_swing_high'] = df_3min['swing_high_price'].ffill()
     df_3min['last_swing_low'] = df_3min['swing_low_price'].ffill()
@@ -157,77 +157,77 @@ def resample_to_3min(df):
     # A swing confirmed by the completion of bar T is only known at T+1.
     df_3min['last_swing_high'] = df_3min['last_swing_high'].shift(1)
     df_3min['last_swing_low'] = df_3min['last_swing_low'].shift(1)
-    
+
     return df_3min
 
 def backtest_strategy(df):
     if df.empty:
         print("No data to backtest.")
         return []
-        
+
     df = calculate_indicators(df)
     df_3min = resample_to_3min(df)
-    
+
     # Merge 3min swing levels back to 1min df (forward fill)
     df = df.join(df_3min[['last_swing_high', 'last_swing_low']], how='left')
     df['last_swing_high'] = df['last_swing_high'].ffill()
     df['last_swing_low'] = df['last_swing_low'].ffill()
-    
+
     trades = []
     active_position = None  # {type: 'CE'/'PE', entry_price: float, qty: int, sl: float, target: float, entry_time: datetime, entry_sl: float}
-    
+
     daily_trades = {} # {date: count}
-    
+
     print(f"Starting Backtest on {len(df)} bars...")
-    
+
     for i in range(1, len(df)):
         current_bar = df.iloc[i]
         prev_bar = df.iloc[i-1]
-        
+
         timestamp = df.index[i]
         current_date = timestamp.date()
         current_time = timestamp.time()
-        
+
         if current_date not in daily_trades:
             daily_trades[current_date] = 0
-            
+
         # Strategy Logic
-        
+
         # 1. Entry Logic
         # Time 9:30 to 11:30
         entry_window = (current_time >= datetime.time(9, 30)) and (current_time <= datetime.time(11, 30))
-        
+
         option_delta = 0.5
-        
+
         if active_position is None:
             if entry_window and daily_trades[current_date] < MAX_TRADES_PER_DAY:
-                
+
                 # Check Signals
                 # Buy CE
                 if (current_bar['close'] > current_bar['or_high']) and \
                    (current_bar['close'] > current_bar['vwap']) and \
                    (current_bar['vol_spike']):
-                       
+
                     sl_level = current_bar['last_swing_low']
                     if pd.isna(sl_level):
                          sl_level = current_bar['or_low']
-                    
+
                     future_entry = current_bar['close']
                     future_risk = future_entry - sl_level
-                    
+
                     if future_risk > 0:
                         option_risk_pts = future_risk * option_delta
-                        
+
                         qty = int(RISK_PER_TRADE / option_risk_pts)
                         # Ensure lot size multiple
                         qty = (qty // LOT_SIZE) * LOT_SIZE
-                        
+
                         if qty > 0:
                             entry_option_price = 200 # Arbitrary ATM price
-                            
+
                             sl_option_price = entry_option_price - option_risk_pts
                             target_option_price = entry_option_price + option_risk_pts # 1:1 RR
-                            
+
                             active_position = {
                                 'type': 'CE',
                                 'entry_time': timestamp,
@@ -240,7 +240,7 @@ def backtest_strategy(df):
                                 'sl_future_level': sl_level, # For trailing logic reference
                                 'half_qty_booked': False
                             }
-                            
+
                             daily_trades[current_date] += 1
                             print(f"[{timestamp}] BUY CE | Fut: {future_entry:.2f} | SL_Fut: {sl_level:.2f} | OptPrice: {entry_option_price} | Qty: {qty}")
 
@@ -248,24 +248,24 @@ def backtest_strategy(df):
                 elif (current_bar['close'] < current_bar['or_low']) and \
                      (current_bar['close'] < current_bar['vwap']) and \
                      (current_bar['vol_spike']):
-                     
+
                     sl_level = current_bar['last_swing_high']
                     if pd.isna(sl_level):
                         sl_level = current_bar['or_high']
-                        
+
                     future_entry = current_bar['close']
                     future_risk = sl_level - future_entry
-                    
+
                     if future_risk > 0:
                         option_risk_pts = future_risk * option_delta
                         qty = int(RISK_PER_TRADE / option_risk_pts)
                         qty = (qty // LOT_SIZE) * LOT_SIZE
-                        
+
                         if qty > 0:
                             entry_option_price = 200
                             sl_option_price = entry_option_price - option_risk_pts
                             target_option_price = entry_option_price + option_risk_pts
-                            
+
                             active_position = {
                                 'type': 'PE',
                                 'entry_time': timestamp,
@@ -284,16 +284,16 @@ def backtest_strategy(df):
         else:
             # Manage Active Position
             pos = active_position
-            
+
             # Update Option Price based on Future Move
             future_curr = current_bar['close']
             future_change = future_curr - pos['future_entry']
-            
+
             if pos['type'] == 'CE':
                 option_curr = pos['entry_price'] + (future_change * option_delta)
             else: # PE
                 option_curr = pos['entry_price'] - (future_change * option_delta) # Put goes up when future goes down
-            
+
             # 1. Check SL Hit
             if option_curr <= pos['sl']:
                 # Exit All
@@ -308,7 +308,7 @@ def backtest_strategy(df):
                 print(f"[{timestamp}] SL Hit ({pos['type']}) | PnL: {pnl:.2f}")
                 active_position = None
                 continue
-                
+
             # 2. Check Target 1 Hit (1:1 RR)
             if not pos['half_qty_booked']:
                 if option_curr >= pos['target']:
@@ -322,7 +322,7 @@ def backtest_strategy(df):
                     # If Qty is 1 lot, 50% is 0.5 lot. Not possible.
                     # We should probably book entire position if < 2 lots?
                     # Or keep simple integer division.
-                    
+
                     if booked_qty > 0:
                         pnl = (pos['target'] - pos['entry_price']) * booked_qty
                         trades.append({
@@ -333,14 +333,14 @@ def backtest_strategy(df):
                             'exit_reason': 'Target 1'
                         })
                         print(f"[{timestamp}] Target 1 Hit ({pos['type']}) | Booked {booked_qty} | PnL: {pnl:.2f}")
-                        
+
                         # Update Position
                         pos['qty'] -= booked_qty
                         pos['half_qty_booked'] = True
                     # If booked_qty is 0 (e.g. 1 lot held), we proceed to trail with full qty.
-            
+
             # 3. Trailing Logic
-            
+
             # VWAP Cross Condition
             vwap_cross_exit = False
             if pos['type'] == 'CE':
@@ -349,7 +349,7 @@ def backtest_strategy(df):
             else: # PE
                 if current_bar['close'] > current_bar['vwap']:
                     vwap_cross_exit = True
-                    
+
             if vwap_cross_exit:
                 # Exit Remaining
                 pnl = (option_curr - pos['entry_price']) * pos['qty']
@@ -363,7 +363,7 @@ def backtest_strategy(df):
                 print(f"[{timestamp}] VWAP Cross Exit ({pos['type']}) | PnL: {pnl:.2f}")
                 active_position = None
                 continue
-                
+
             # Swing Trailing Logic
             if pos['type'] == 'CE':
                 if not pd.isna(current_bar['last_swing_low']):
@@ -410,15 +410,15 @@ if __name__ == "__main__":
         # print("Falling back to Dummy Data...")
         # df = generate_dummy_data(days=5)
         df = pd.DataFrame()
-        
+
     if not df.empty:
         trades = backtest_strategy(df)
-        
+
         print("\n--- Backtest Summary ---")
         total_pnl = sum(t['pnl'] for t in trades)
         print(f"Total PnL: {total_pnl:.2f}")
         print(f"Total Trades: {len(trades)}")
-        
+
         df_trades = pd.DataFrame(trades)
         if not df_trades.empty:
             print(df_trades)

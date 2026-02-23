@@ -23,13 +23,13 @@ This directory contains a Python script to backtest an intraday Nifty Options st
 
 1.  **Install Dependencies**:
     ```bash
-    pip install pandas numpy
+    pip install pandas numpy requests websockets
     ```
     Also ensure `dhanhq` is installed (available in the parent repository).
 
 2.  **Set Environment Variables**:
     To use real historical data, you must provide your DhanHQ API credentials.
-    
+
     ```bash
     export DHAN_CLIENT_ID="your_client_id"
     export DHAN_ACCESS_TOKEN="your_access_token"

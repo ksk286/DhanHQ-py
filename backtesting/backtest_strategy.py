@@ -19,11 +19,12 @@ LOT_SIZE = 50  # Nifty Lot Size
 # API Configuration (Set these via environment variables or edit here)
 CLIENT_ID = os.getenv("DHAN_CLIENT_ID", "")
 ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "")
-# Security ID for Nifty Future (Update based on current contract)
-# Example: Find the Security ID from Dhan Instrument list
+
+# Default is Nifty 50 Index (ID 13) for stability (Futures IDs change monthly)
+# Users should override this to use specific Future contracts
 SECURITY_ID = os.getenv("DHAN_SECURITY_ID", "13")
-EXCHANGE_SEGMENT = "NSE_FNO"
-INSTRUMENT_TYPE = "FUTIDX" # Future Index
+EXCHANGE_SEGMENT = os.getenv("DHAN_EXCHANGE_SEGMENT", "IDX_I") # Default: Index
+INSTRUMENT_TYPE = os.getenv("DHAN_INSTRUMENT_TYPE", "INDEX") # Default: Index
 
 def fetch_historical_data(client_id, access_token, security_id, days=5):
     """Fetches historical 1-minute data using DhanHQ API."""
@@ -38,7 +39,7 @@ def fetch_historical_data(client_id, access_token, security_id, days=5):
     f_date = from_date.strftime("%Y-%m-%d")
     t_date = to_date.strftime("%Y-%m-%d")
 
-    print(f"Fetching data from {f_date} to {t_date} for Security ID {security_id}...")
+    print(f"Fetching data from {f_date} to {t_date} for Security ID {security_id} ({EXCHANGE_SEGMENT}/{INSTRUMENT_TYPE})...")
 
     try:
         response = dhan.intraday_minute_data(

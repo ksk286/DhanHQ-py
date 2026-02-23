@@ -25,15 +25,27 @@ This directory contains a Python script to backtest an intraday Nifty Options st
     ```bash
     pip install pandas numpy
     ```
+    Also ensure `dhanhq` is installed (available in the parent repository).
 
-2.  **Run the Backtest**:
+2.  **Set Environment Variables**:
+    To use real historical data, you must provide your DhanHQ API credentials.
+    
+    ```bash
+    export DHAN_CLIENT_ID="your_client_id"
+    export DHAN_ACCESS_TOKEN="your_access_token"
+    # Optional: Set the specific Nifty Future Security ID (Default: 13 which is Index, needs to be Future ID)
+    export DHAN_SECURITY_ID="YOUR_NIFTY_FUT_SECURITY_ID"
+    ```
+
+3.  **Run the Backtest**:
     ```bash
     python backtest_strategy.py
     ```
 
-    The script will generate dummy Nifty Future data (Random Walk) and simulate the strategy execution, printing a trade log and final PnL.
+    The script will fetch 5 days of historical 1-minute data for the specified Security ID and run the backtest.
 
-## Customization
+## Notes
 
-*   **Data**: Replace `generate_dummy_data()` with your own data loading function (e.g., `pd.read_csv('nifty_future.csv')`). Ensure the DataFrame has `datetime` index and columns: `open`, `high`, `low`, `close`, `volume`.
-*   **Parameters**: Adjust `CAPITAL`, `RISK_PER_TRADE`, `MAX_TRADES_PER_DAY` at the top of the script.
+*   **Security ID**: The script defaults `SECURITY_ID` to "13" (Nifty Index). For accurate backtesting, you **must** find the Security ID of the specific Nifty Future contract you want to test (e.g., current month expiry) and set the `DHAN_SECURITY_ID` environment variable.
+*   **Data**: The script fetches data using `dhan.intraday_minute_data`. Ensure your API subscription supports this.
+*   **Option Pricing**: The backtest simulates option prices using a Delta of 0.5 (ATM) relative to the Future price movement, as historical option charts for specific strikes are harder to map dynamically without an Option Chain history database.

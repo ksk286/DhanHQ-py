@@ -2,13 +2,6 @@ import pandas as pd
 import numpy as np
 import datetime
 import random
-import os
-import sys
-
-# Ensure we can import dhanhq from the parent directory
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
-
-from dhanhq import DhanContext, dhanhq
 
 # Configuration
 CAPITAL = 500000
@@ -16,84 +9,44 @@ RISK_PER_TRADE = 5000  # 1% of 5L
 MAX_TRADES_PER_DAY = 2
 LOT_SIZE = 50  # Nifty Lot Size
 
-# API Configuration (Set these via environment variables or edit here)
-CLIENT_ID = os.getenv("DHAN_CLIENT_ID", "")
-ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "")
-# Security ID for Nifty Future (Update based on current contract)
-# Example: Find the Security ID from Dhan Instrument list
-SECURITY_ID = os.getenv("DHAN_SECURITY_ID", "13")
-EXCHANGE_SEGMENT = "NSE_FNO"
-INSTRUMENT_TYPE = "FUTIDX" # Future Index
+def generate_dummy_data(days=5):
+    """Generates synthetic 1-minute OHLCV data for Nifty Future."""
+    start_date = datetime.datetime.now().replace(hour=9, minute=15, second=0, microsecond=0) - datetime.timedelta(days=days)
+    data = []
 
-def fetch_historical_data(client_id, access_token, security_id, days=5):
-    """Fetches historical 1-minute data using DhanHQ API."""
-    print("Initializing DhanHQ Client...")
-    dhan_context = DhanContext(client_id, access_token)
-    dhan = dhanhq(dhan_context)
+    price = 19500.0
 
-    # Calculate dates
-    to_date = datetime.datetime.now()
-    from_date = to_date - datetime.timedelta(days=days)
+    for day in range(days):
+        current_time = start_date + datetime.timedelta(days=day)
+        # Market hours 9:15 to 15:30 -> 375 minutes
+        market_open = current_time.replace(hour=9, minute=15)
 
-    f_date = from_date.strftime("%Y-%m-%d")
-    t_date = to_date.strftime("%Y-%m-%d")
+        daily_volatility = random.uniform(0.005, 0.015)
 
-    print(f"Fetching data from {f_date} to {t_date} for Security ID {security_id}...")
+        for i in range(375):
+            timestamp = market_open + datetime.timedelta(minutes=i)
 
-    try:
-        response = dhan.intraday_minute_data(
-            security_id=security_id,
-            exchange_segment=EXCHANGE_SEGMENT,
-            instrument_type=INSTRUMENT_TYPE,
-            from_date=f_date,
-            to_date=t_date,
-            interval=1
-        )
+            change = price * random.normalvariate(0, daily_volatility / np.sqrt(375))
+            open_p = price
+            close_p = price + change
+            high_p = max(open_p, close_p) + abs(change) * random.random()
+            low_p = min(open_p, close_p) - abs(change) * random.random()
+            volume = int(random.lognormvariate(10, 1))
 
-        if response.get('status') == 'failure':
-            raise Exception(f"API Error: {response.get('remarks')}")
+            data.append({
+                'datetime': timestamp,
+                'open': open_p,
+                'high': high_p,
+                'low': low_p,
+                'close': close_p,
+                'volume': volume
+            })
 
-        data = response.get('data')
-        if not data:
-             raise Exception("No data returned from API (Empty response)")
+            price = close_p
 
-        # Parse data
-        # Data is dict with lists: open, high, low, close, volume, timestamp (epoch)
-        # Verify required keys exist
-        required_keys = ['open', 'high', 'low', 'close', 'volume', 'timestamp']
-        if not all(k in data for k in required_keys):
-             # Sometimes API might return different structure or partial data
-             print(f"Available keys: {data.keys()}")
-             raise Exception(f"Missing required keys in data. Expected {required_keys}")
-
-        df = pd.DataFrame(data)
-
-        if df.empty:
-            raise Exception("Returned DataFrame is empty.")
-
-        # Convert timestamp to datetime
-        # Detect unit (seconds or ms)
-        first_ts = df['timestamp'].iloc[0]
-        unit = 's'
-        if first_ts > 10000000000: # > 10^10 implies ms (13 digits)
-            unit = 'ms'
-
-        df['datetime'] = pd.to_datetime(df['timestamp'], unit=unit)
-
-        # Set index
-        df.set_index('datetime', inplace=True)
-
-        # Ensure numeric columns
-        cols = ['open', 'high', 'low', 'close', 'volume']
-        for col in cols:
-            df[col] = pd.to_numeric(df[col])
-
-        print(f"Successfully fetched {len(df)} rows.")
-        return df[['open', 'high', 'low', 'close', 'volume']]
-
-    except Exception as e:
-        print(f"Error fetching data: {e}")
-        return pd.DataFrame()
+    df = pd.DataFrame(data)
+    df.set_index('datetime', inplace=True)
+    return df
 
 def calculate_indicators(df):
     """Calculates necessary indicators for the strategy."""
@@ -129,6 +82,18 @@ def calculate_indicators(df):
 
     return df
 
+def get_3min_swing(df, current_idx):
+    """
+    Identifies the most recent swing high/low based on 3-minute resampling.
+    This is a simplified implementation looking back at recent 3-min bars.
+    """
+    # Look back last 60 minutes to find swings
+    # Resample last 60 mins of data to 3min
+
+    # Optimization: Pass the resampled 3min dataframe and find the last swing
+    # But for backtesting row-by-row, we can just look at the pre-calculated swings
+    pass
+
 def resample_to_3min(df):
     """Resamples 1-min data to 3-min data for swing calculation."""
     df_3min = df.resample('3min').agg({
@@ -153,22 +118,30 @@ def resample_to_3min(df):
     df_3min['last_swing_high'] = df_3min['swing_high_price'].ffill()
     df_3min['last_swing_low'] = df_3min['swing_low_price'].ffill()
 
-    # Shift forward by 1 bar (3 minutes) to prevent lookahead bias.
-    # A swing confirmed by the completion of bar T is only known at T+1.
-    df_3min['last_swing_high'] = df_3min['last_swing_high'].shift(1)
-    df_3min['last_swing_low'] = df_3min['last_swing_low'].shift(1)
-
     return df_3min
 
 def backtest_strategy(df):
-    if df.empty:
-        print("No data to backtest.")
-        return []
-
     df = calculate_indicators(df)
     df_3min = resample_to_3min(df)
 
     # Merge 3min swing levels back to 1min df (forward fill)
+    # We need to be careful about lookahead bias.
+    # The 3min swing at 9:33 is known at 9:33:00 (or end of it).
+    # Resample sets label to left edge usually.
+    # If 3min bar is 9:30-9:33. High is known at 9:33.
+    # So at 9:33, we know the swing of the *previous* bar?
+    # Logic: Swing High at T-1.
+    # If we are at 9:33 (end of bar), and 9:30-9:33 was a swing high? No, that's current bar.
+    # Swing High logic: High[t-1] > High[t-2] & High[t-1] > High[t].
+    # So we need t (current completed bar) to confirm t-1 was a swing.
+    # So the swing is confirmed 1 bar *after* the peak.
+    # If working with 3-min bars, the swing determined by bars ending 9:30, 9:33, 9:36.
+    # At 9:36, we compare 9:33 High with 9:30 and 9:36. If 9:33 is highest, then 9:33 was a swing high.
+    # So we know it at 9:36.
+
+    # Merge on time index
+    # Forward fill the swings
+
     df = df.join(df_3min[['last_swing_high', 'last_swing_low']], how='left')
     df['last_swing_high'] = df['last_swing_high'].ffill()
     df['last_swing_low'] = df['last_swing_low'].ffill()
@@ -178,7 +151,7 @@ def backtest_strategy(df):
 
     daily_trades = {} # {date: count}
 
-    print(f"Starting Backtest on {len(df)} bars...")
+    print("Starting Backtest...")
 
     for i in range(1, len(df)):
         current_bar = df.iloc[i]
@@ -197,6 +170,15 @@ def backtest_strategy(df):
         # Time 9:30 to 11:30
         entry_window = (current_time >= datetime.time(9, 30)) and (current_time <= datetime.time(11, 30))
 
+        # Simulating Option Price
+        # Assume ATM Option Delta 0.5. Price approx (Future - Strike) + TimeValue.
+        # Simplification: Trade the Future directly but apply Option logic (Risk/Reward).
+        # OR: Simulate Option Price = FuturePrice * 0.01 (Example) + Intrinsic.
+        # Better: Assume we buy ATM. Delta 0.5.
+        # Entry Price (Option) = 100 (Arbitrary base)
+        # Option moves 0.5 points for every 1 point move in Future.
+        # This preserves the "Strategy Logic" while abstracting Option Pricing model.
+
         option_delta = 0.5
 
         if active_position is None:
@@ -208,9 +190,20 @@ def backtest_strategy(df):
                    (current_bar['close'] > current_bar['vwap']) and \
                    (current_bar['vol_spike']):
 
+                    # Entry Setup
+                    # SL = Recent 3-min Swing Low
+                    # If no swing low (early in day), use OR Low or Day Low?
+                    # Fallback to OR Low if Swing Low is NaN or too far/close
                     sl_level = current_bar['last_swing_low']
                     if pd.isna(sl_level):
                          sl_level = current_bar['or_low']
+
+                    # Entry execution
+                    # Option Entry Calculation
+                    # Future Entry = Current Close
+                    # Future SL = sl_level
+                    # Risk in Future Points = Future Entry - Future SL
+                    # Option Risk Points = Future Risk Points * Delta
 
                     future_entry = current_bar['close']
                     future_risk = future_entry - sl_level
@@ -218,31 +211,35 @@ def backtest_strategy(df):
                     if future_risk > 0:
                         option_risk_pts = future_risk * option_delta
 
+                        # Position Sizing
+                        # Risk = 5000
+                        # Qty = Risk / Option Risk Pts
                         qty = int(RISK_PER_TRADE / option_risk_pts)
-                        # Ensure lot size multiple
-                        qty = (qty // LOT_SIZE) * LOT_SIZE
+                        # Round to nearest lot size? Or just raw?
+                        # Using raw for precision in backtest
 
-                        if qty > 0:
-                            entry_option_price = 200 # Arbitrary ATM price
+                        # Simulated Option Price (Base 200 + Intrinsic?)
+                        # Just track PnL based on points
+                        entry_option_price = 200 # Arbitrary ATM price
 
-                            sl_option_price = entry_option_price - option_risk_pts
-                            target_option_price = entry_option_price + option_risk_pts # 1:1 RR
+                        sl_option_price = entry_option_price - option_risk_pts
+                        target_option_price = entry_option_price + option_risk_pts # 1:1 RR
 
-                            active_position = {
-                                'type': 'CE',
-                                'entry_time': timestamp,
-                                'entry_price': entry_option_price, # Option Price
-                                'future_entry': future_entry,
-                                'qty': qty,
-                                'sl': sl_option_price,
-                                'target': target_option_price,
-                                'initial_sl': sl_option_price,
-                                'sl_future_level': sl_level, # For trailing logic reference
-                                'half_qty_booked': False
-                            }
+                        active_position = {
+                            'type': 'CE',
+                            'entry_time': timestamp,
+                            'entry_price': entry_option_price, # Option Price
+                            'future_entry': future_entry,
+                            'qty': qty,
+                            'sl': sl_option_price,
+                            'target': target_option_price,
+                            'initial_sl': sl_option_price,
+                            'sl_future_level': sl_level, # For trailing logic reference
+                            'half_qty_booked': False
+                        }
 
-                            daily_trades[current_date] += 1
-                            print(f"[{timestamp}] BUY CE | Fut: {future_entry:.2f} | SL_Fut: {sl_level:.2f} | OptPrice: {entry_option_price} | Qty: {qty}")
+                        daily_trades[current_date] += 1
+                        print(f"[{timestamp}] BUY CE | Fut: {future_entry:.2f} | SL_Fut: {sl_level:.2f} | OptPrice: {entry_option_price} | Qty: {qty}")
 
                 # Buy PE
                 elif (current_bar['close'] < current_bar['or_low']) and \
@@ -259,27 +256,25 @@ def backtest_strategy(df):
                     if future_risk > 0:
                         option_risk_pts = future_risk * option_delta
                         qty = int(RISK_PER_TRADE / option_risk_pts)
-                        qty = (qty // LOT_SIZE) * LOT_SIZE
 
-                        if qty > 0:
-                            entry_option_price = 200
-                            sl_option_price = entry_option_price - option_risk_pts
-                            target_option_price = entry_option_price + option_risk_pts
+                        entry_option_price = 200
+                        sl_option_price = entry_option_price - option_risk_pts
+                        target_option_price = entry_option_price + option_risk_pts
 
-                            active_position = {
-                                'type': 'PE',
-                                'entry_time': timestamp,
-                                'entry_price': entry_option_price,
-                                'future_entry': future_entry,
-                                'qty': qty,
-                                'sl': sl_option_price,
-                                'target': target_option_price,
-                                'initial_sl': sl_option_price,
-                                'sl_future_level': sl_level,
-                                'half_qty_booked': False
-                            }
-                            daily_trades[current_date] += 1
-                            print(f"[{timestamp}] BUY PE | Fut: {future_entry:.2f} | SL_Fut: {sl_level:.2f} | OptPrice: {entry_option_price} | Qty: {qty}")
+                        active_position = {
+                            'type': 'PE',
+                            'entry_time': timestamp,
+                            'entry_price': entry_option_price,
+                            'future_entry': future_entry,
+                            'qty': qty,
+                            'sl': sl_option_price,
+                            'target': target_option_price,
+                            'initial_sl': sl_option_price,
+                            'sl_future_level': sl_level,
+                            'half_qty_booked': False
+                        }
+                        daily_trades[current_date] += 1
+                        print(f"[{timestamp}] BUY PE | Fut: {future_entry:.2f} | SL_Fut: {sl_level:.2f} | OptPrice: {entry_option_price} | Qty: {qty}")
 
         else:
             # Manage Active Position
@@ -314,32 +309,26 @@ def backtest_strategy(df):
                 if option_curr >= pos['target']:
                     # Book 50%
                     booked_qty = int(pos['qty'] / 2)
-                    # Adjust booked_qty to be lot multiple if possible? Or just half?
-                    # Half of 50 is 25. If lot size is 50, strictly speaking we can't book partial.
-                    # But if we have 100, we book 50.
-                    # If we have 50 (1 lot), should we book?
-                    # Exit Rules: "Target 1: 50% quantity at 1:1 RR".
-                    # If Qty is 1 lot, 50% is 0.5 lot. Not possible.
-                    # We should probably book entire position if < 2 lots?
-                    # Or keep simple integer division.
+                    pnl = (pos['target'] - pos['entry_price']) * booked_qty
+                    trades.append({
+                        'entry_time': pos['entry_time'],
+                        'exit_time': timestamp,
+                        'type': pos['type'],
+                        'pnl': pnl,
+                        'exit_reason': 'Target 1'
+                    })
+                    print(f"[{timestamp}] Target 1 Hit ({pos['type']}) | Booked {booked_qty} | PnL: {pnl:.2f}")
 
-                    if booked_qty > 0:
-                        pnl = (pos['target'] - pos['entry_price']) * booked_qty
-                        trades.append({
-                            'entry_time': pos['entry_time'],
-                            'exit_time': timestamp,
-                            'type': pos['type'],
-                            'pnl': pnl,
-                            'exit_reason': 'Target 1'
-                        })
-                        print(f"[{timestamp}] Target 1 Hit ({pos['type']}) | Booked {booked_qty} | PnL: {pnl:.2f}")
-
-                        # Update Position
-                        pos['qty'] -= booked_qty
-                        pos['half_qty_booked'] = True
-                    # If booked_qty is 0 (e.g. 1 lot held), we proceed to trail with full qty.
+                    # Update Position
+                    pos['qty'] -= booked_qty
+                    pos['half_qty_booked'] = True
+                    # Trail rest
+                    # Usually move SL to Cost? Strategy says "Trail rest using Previous 3-min swing..."
+                    # We continue to trailing logic below
 
             # 3. Trailing Logic
+            # "Trail rest using: Previous 3-min swing low/high OR VWAP cross"
+            # Update SL based on conditions
 
             # VWAP Cross Condition
             vwap_cross_exit = False
@@ -365,19 +354,44 @@ def backtest_strategy(df):
                 continue
 
             # Swing Trailing Logic
+            # Update SL to recent swing
             if pos['type'] == 'CE':
                 if not pd.isna(current_bar['last_swing_low']):
+                     # Option SL level calculation based on Future Swing
+                     # New SL Option = Entry Option + (Future Swing - Future Entry) * Delta
+                     # Basically mapping Future Swing Level to Option Price
                      future_swing_level = current_bar['last_swing_low']
+
+                     # Trail up only
+                     # If future swing is higher than previous reference level?
+                     # We need to maintain the SL price.
+
                      new_sl_opt = pos['entry_price'] + (future_swing_level - pos['future_entry']) * option_delta
+
                      if new_sl_opt > pos['sl']:
                          pos['sl'] = new_sl_opt
+                         # print(f"[{timestamp}] Trailing SL Updated to {pos['sl']:.2f}")
 
             else: # PE
                 if not pd.isna(current_bar['last_swing_high']):
                      future_swing_level = current_bar['last_swing_high']
+
+                     # Put Price increases as Future decreases.
+                     # SL for Put is below current price.
+                     # If Future Swing High moves down, Put SL moves up.
+                     # New SL Opt = Entry Opt - (Future Swing - Future Entry) * Delta ?
+                     # Wait. Put PnL = (Entry Future - Current Future) * Delta
+                     # Price = Entry Opt + PnL
+
+                     # If Future is at Swing High (Stop Level for Put).
+                     # PnL at Stop = (Entry Future - Swing High) * Delta
+                     # SL Opt Price = Entry Opt + (Entry Future - Swing High) * Delta
+
                      new_sl_opt = pos['entry_price'] + (pos['future_entry'] - future_swing_level) * option_delta
+
                      if new_sl_opt > pos['sl']:
                          pos['sl'] = new_sl_opt
+                         # print(f"[{timestamp}] Trailing SL Updated to {pos['sl']:.2f}")
 
             # 4. EOD Exit
             if current_time >= datetime.time(15, 15):
@@ -396,31 +410,19 @@ def backtest_strategy(df):
     return trades
 
 if __name__ == "__main__":
-    if CLIENT_ID and ACCESS_TOKEN:
-        print(f"Credentials found. Using Security ID: {SECURITY_ID}")
-        df = fetch_historical_data(CLIENT_ID, ACCESS_TOKEN, SECURITY_ID, days=5)
+    print("Generating Dummy Data...")
+    df = generate_dummy_data(days=5)
+    print("Data Generated. Rows:", len(df))
+
+    trades = backtest_strategy(df)
+
+    print("\n--- Backtest Summary ---")
+    total_pnl = sum(t['pnl'] for t in trades)
+    print(f"Total PnL: {total_pnl:.2f}")
+    print(f"Total Trades: {len(trades)}")
+
+    df_trades = pd.DataFrame(trades)
+    if not df_trades.empty:
+        print(df_trades)
     else:
-        print("WARNING: DHAN_CLIENT_ID and/or DHAN_ACCESS_TOKEN not set in environment.")
-        print("Please export these variables to use live historical data.")
-        print("Example: export DHAN_CLIENT_ID='your_id'")
-        print("         export DHAN_ACCESS_TOKEN='your_token'")
-        print("         export DHAN_SECURITY_ID='13'")
-        print("\nExiting as per request to use historical data.")
-        # Alternatively, uncomment below to fallback to dummy data
-        # print("Falling back to Dummy Data...")
-        # df = generate_dummy_data(days=5)
-        df = pd.DataFrame()
-
-    if not df.empty:
-        trades = backtest_strategy(df)
-
-        print("\n--- Backtest Summary ---")
-        total_pnl = sum(t['pnl'] for t in trades)
-        print(f"Total PnL: {total_pnl:.2f}")
-        print(f"Total Trades: {len(trades)}")
-
-        df_trades = pd.DataFrame(trades)
-        if not df_trades.empty:
-            print(df_trades)
-        else:
-            print("No trades executed.")
+        print("No trades executed.")

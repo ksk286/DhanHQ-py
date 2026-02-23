@@ -1,10 +1,38 @@
 import sys
+import os
 import datetime
 import argparse
 import pandas as pd
-from . import config
-from .backtester import Backtester
-from .performance import calculate_metrics, plot_results
+
+# Shim for running as script
+if __package__ is None or __package__ == "":
+    # Add project root to path
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+    # Import config directly if running as script
+    # But relative import "from . import config" fails if __package__ is None.
+    # We can fake it by importing as a module.
+    # Or cleaner: Just use absolute imports if possible?
+    # Relative imports require __package__ to be set.
+
+    # Let's try setting __package__ manually?
+    # This is tricky.
+    # Better: Use try/except or absolute imports with path modification.
+
+    # Let's just import config directly using importlib or sys.path
+    try:
+        from spm_backtester import config
+        from spm_backtester.backtester import Backtester
+        from spm_backtester.performance import calculate_metrics, plot_results
+    except ImportError:
+        # Fallback if run from inside spm_backtester dir?
+        import config
+        from backtester import Backtester
+        from performance import calculate_metrics, plot_results
+else:
+    from . import config
+    from .backtester import Backtester
+    from .performance import calculate_metrics, plot_results
 
 def main():
     parser = argparse.ArgumentParser(description="SPM Backtester")
